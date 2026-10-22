@@ -401,6 +401,9 @@
   // Only first plays count (state.played keeps the drafter), so travelling minors passed
   // on to someone else don't get mislabeled.
   const playedRound = (id, pid) => {
+    // Only drafted cards: major improvements are bought from the shared board.
+    const type = state.cards[id] && state.cards[id].type;
+    if (type !== 'occupation' && type !== 'minor') return null;
     if (state.passInfo[id]) {
       const r = roundFor(id, pid);
       return r == null ? null : { lo: r, hi: r };
