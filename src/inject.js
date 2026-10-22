@@ -146,8 +146,8 @@
 
   const GHOST_STYLE = `
     .agr-ghost { position: relative; }
-    .agr-ghost.agr-possible .player-card-resizable,
-    .agr-ghost.agr-guessed .player-card-resizable { opacity: .55; filter: saturate(.6); }
+    /* Every inferred card is faded; only cards actually played in the game look normal. */
+    .agr-ghost .player-card-resizable { opacity: .55; filter: saturate(.6); }
     /* zoomOnCard() clones the card as "<id>_animated": show the zoomed copy at full strength. */
     .agr-ghost[id$="_animated"] .player-card-resizable { opacity: 1; filter: none; }
     .agr-ghost.agr-possible { outline: 2px dashed #8a7a5c; outline-offset: -2px; border-radius: 8px; }

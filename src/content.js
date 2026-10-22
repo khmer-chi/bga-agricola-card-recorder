@@ -327,6 +327,7 @@
     .card { position: relative; padding: 1px 5px; border-radius: 4px; border: 1px solid; white-space: nowrap; }
     .card small { opacity: .6; margin-left: 2px; }
     .card.possible { border-style: dashed; opacity: .85; }
+    .card.certain { opacity: .85; }
     .badge { position: absolute; top: -6px; right: -6px; width: 13px; height: 13px; border-radius: 50%;
       font: bold 9px/13px -apple-system, sans-serif; font-style: normal; text-align: center; color: #fff; }
     .b-played { background: #3a7d44; }
