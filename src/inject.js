@@ -98,6 +98,31 @@
     return out;
   };
 
+  // Full card objects (with desc, costs, ...) so the board overlay can render cards that
+  // BGA no longer has cached after a reload. `description` is derived HTML; tplPlayerCard
+  // rebuilds it from `desc`.
+  const fullCards = (val) => {
+    const out = [];
+    const walk = (v, depth) => {
+      if (!v || typeof v !== 'object' || depth > 5) return;
+      if (typeof v.id === 'string' && CARD_ID.test(v.id)) {
+        if (v.desc) {
+          const c = JSON.parse(JSON.stringify(v));
+          delete c.description;
+          out.push(c);
+        }
+        return;
+      }
+      for (const x of Array.isArray(v) ? v : Object.values(v)) walk(x, depth + 1);
+    };
+    walk(val, 0);
+    return out;
+  };
+  const postCardData = (val) => {
+    const cards = fullCards(val);
+    if (cards.length) post('cardData', { cards });
+  };
+
   const hook = (g) => {
     const q = g.notifqueue;
     const orig = q.dispatchNotification;
@@ -105,6 +130,7 @@
       try {
         if (notif && TRACKED.has(notif.type)) {
           window.__agrRecLog.push(notif);
+          postCardData(notif.args);
           post('notif', { type: notif.type, args: slimArgs(notif.args), uid: notif.uid || null });
         }
       } catch (e) {
@@ -114,6 +140,83 @@
     };
   };
 
+  // ---------- board overlay ----------
+  // Draws the cards each opponent certainly / possibly holds next to their played cards,
+  // using BGA's own card template, with a status badge in the top-right corner.
+
+  const GHOST_STYLE = `
+    .agr-ghost { position: relative; }
+    .agr-ghost.agr-possible .player-card-resizable { opacity: .55; filter: saturate(.6); }
+    .agr-ghost.agr-possible { outline: 2px dashed #8a7a5c; outline-offset: -2px; border-radius: 8px; }
+    .agr-ghost.agr-certain { outline: 2px solid #b03a2e; outline-offset: -2px; border-radius: 8px; }
+    .agr-badge { position: absolute; top: -6px; right: -6px; z-index: 5; width: 22px; height: 22px; border-radius: 50%;
+      color: #fff; font: bold 14px/22px sans-serif; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.4); pointer-events: none; }
+    .agr-badge.b-certain { background: #b03a2e; }
+    .agr-badge.b-possible { background: #8a7a5c; }
+    .agr-ghost-tip { font-weight: bold; margin-bottom: 4px; }
+  `;
+  const GHOST_BADGE = { certain: '★', possible: '?' };
+
+  let ghostSpec = {}; // pid -> [{ id, status, tip, card }]
+
+  const esc = (s) =>
+    String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+  const removeGhosts = (g) => {
+    for (const el of document.querySelectorAll('.agr-ghost')) {
+      try {
+        if (g.removeTooltip) g.removeTooltip(el.id);
+      } catch (e) {}
+      el.remove();
+    }
+  };
+
+  const renderGhosts = (g) => {
+    if (!document.getElementById('agr-ghost-style')) {
+      const st = document.createElement('style');
+      st.id = 'agr-ghost-style';
+      st.textContent = GHOST_STYLE;
+      document.head.appendChild(st);
+    }
+    removeGhosts(g);
+    for (const [pid, items] of Object.entries(ghostSpec)) {
+      const wrapper = document.getElementById('cards-wrapper-' + pid);
+      if (!wrapper) continue;
+      for (const { id, status, tip, card } of items) {
+        if (document.getElementById(id)) continue; // BGA already shows the real card
+        try {
+          const c = { ...card, mini: true, location: 'inPlay' };
+          const tmp = document.createElement('div');
+          tmp.innerHTML = g.tplPlayerCard(c).trim();
+          const el = tmp.firstElementChild;
+          el.id = 'agr-ghost-' + id;
+          el.dataset.id = 'agr-ghost-' + id;
+          el.classList.add('agr-ghost', 'agr-' + status, 'mini');
+          const badge = document.createElement('div');
+          badge.className = 'agr-badge b-' + status;
+          badge.textContent = GHOST_BADGE[status] || '';
+          el.appendChild(badge);
+          wrapper.appendChild(el);
+          if (g.addTooltipHtml) g.addTooltipHtml(el.id, `<div class="agr-ghost-tip">${esc(tip)}</div>` + g.tplPlayerCard({ ...card }, true));
+        } catch (e) {
+          console.warn('[agr-rec] ghost render failed', id, e);
+        }
+      }
+    }
+    // Player boards have a JS-computed fixed height; recompute it so extra cards push the
+    // next row down instead of overlapping it.
+    try {
+      if (g.updatePlayerBoardScale) g.updatePlayerBoardScale();
+    } catch (e) {}
+  };
+
+  // BGA sometimes rebuilds the player boards; put the ghosts back if they disappear.
+  const ghostCount = () => Object.values(ghostSpec).reduce((n, items) => n + items.length, 0);
+  const keepGhosts = (g) =>
+    setInterval(() => {
+      if (ghostCount() && document.querySelectorAll('.agr-ghost').length === 0) renderGhosts(g);
+    }, 2000);
+
   let tries = 0;
   const timer = setInterval(() => {
     const g = window.gameui;
@@ -122,10 +225,17 @@
       clearInterval(timer);
       hook(g);
       post('snapshot', snapshot(g));
-      // Let content.js ask for a fresh snapshot (e.g. after a manual resync).
+      postCardData([g.gamedatas.playerCards, g.gamedatas.players[g.player_id] && g.gamedatas.players[g.player_id].hand, g.gamedatas.draft]);
+      keepGhosts(g);
       window.addEventListener('message', (e) => {
-        if (e.source === window && e.data && e.data.source === SOURCE && e.data.kind === 'requestSnapshot') {
-          post('snapshot', snapshot(g));
+        if (e.source !== window || !e.data || e.data.source !== SOURCE) return;
+        // Let content.js ask for a fresh snapshot (e.g. after a manual resync).
+        if (e.data.kind === 'requestSnapshot') post('snapshot', snapshot(g));
+        if (e.data.kind === 'ghosts') {
+          const next = e.data.payload.byPlayer || {};
+          const unchanged = JSON.stringify(next) === JSON.stringify(ghostSpec);
+          ghostSpec = next;
+          if (!unchanged || document.querySelectorAll('.agr-ghost').length !== ghostCount()) renderGhosts(g);
         }
       });
       console.log('[agr-rec] hooked table', g.table_id);

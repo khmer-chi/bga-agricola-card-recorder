@@ -35,6 +35,7 @@
     returnedGroups: [], // { turn, ids }: cards missing from a pile when it came back, taken one-per-type by each successor
     pickQuota: null, // { occupation: 1, minor: 1 }: cards of each type a player takes per draft turn
     played: {}, // id -> player id who played it
+    cardData: {}, // id -> full BGA card object, so the board overlay can render it after a reload
     draftOver: false,
     updatedAt: 0,
   });
@@ -272,9 +273,18 @@
     .meta { color: #7a6548; margin-bottom: 4px; }
     h4 { margin: 8px 0 4px; font-size: 12px; color: #6b4f2a; border-bottom: 1px solid #e2d3b4; padding-bottom: 2px; }
     h5 { margin: 4px 0 2px; font-size: 11px; color: #7a6548; font-weight: 600; }
-    .list { display: flex; flex-wrap: wrap; gap: 3px; }
-    .card { padding: 1px 5px; border-radius: 4px; border: 1px solid; white-space: nowrap; }
+    .list { display: flex; flex-wrap: wrap; gap: 6px 4px; padding-top: 4px; }
+    .card { position: relative; padding: 1px 5px; border-radius: 4px; border: 1px solid; white-space: nowrap; }
     .card small { opacity: .6; margin-left: 2px; }
+    .card.possible { border-style: dashed; opacity: .85; }
+    .badge { position: absolute; top: -6px; right: -6px; width: 13px; height: 13px; border-radius: 50%;
+      font: bold 9px/13px -apple-system, sans-serif; font-style: normal; text-align: center; color: #fff; }
+    .b-played { background: #3a7d44; }
+    .b-certain { background: #b03a2e; }
+    .b-possible { background: #8a7a5c; }
+    .legend { display: flex; gap: 10px; margin: 2px 0 4px; color: #7a6548; }
+    .legend .badge { position: static; display: inline-block; margin-right: 3px; vertical-align: -2px; }
+    .counts { font-weight: normal; margin-left: 4px; }
     .occupation { background: #fff3c4; border-color: #d8b84a; }
     .minor { background: #ffe1c7; border-color: #d98b4a; }
     .major { background: #e3e3e3; border-color: #999; }
@@ -283,10 +293,18 @@
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
   `;
 
-  const cardChip = (id, extraClass = '') => {
+  // Status badges in a card's top-right corner.
+  const BADGE = { played: '✓', certain: '★', possible: '?' };
+
+  // `status` drives the badge; data-* attributes describe the claim for tests and tooling.
+  const cardChip = (id, { extraClass = '', status = '', cands = null, tip = '' } = {}) => {
     const c = state.cards[id] || { id, name: id };
     const num = c.numbering || id.split('_')[0];
-    return `<span class="card ${esc(c.type || '')} ${extraClass}" title="${esc(c.name)} (${esc(num)})">${esc(c.name)}<small>${esc(num)}</small></span>`;
+    const title = `${c.name} (${num})${tip ? '\n' + tip : ''}`;
+    const badge = BADGE[status] ? `<i class="badge b-${status}">${BADGE[status]}</i>` : '';
+    return `<span class="card ${esc(c.type || '')} ${status} ${extraClass}" data-id="${esc(id)}" data-status="${esc(status)}"${
+      cands ? ` data-cands="${esc(cands.join(','))}"` : ''
+    } title="${esc(title)}">${esc(c.name)}<small>${esc(num)}</small>${badge}</span>`;
   };
 
   const byType = (ids) => {
@@ -301,45 +319,97 @@
       .join('');
   };
 
+  const pname = (pid) => (state.players[pid] || { name: pid }).name;
+  const typeRank = (id) => ({ occupation: 0, minor: 1, major: 2 })[state.cards[id] && state.cards[id].type] ?? 3;
+  const possibleTip = (id, cands) => {
+    const orDiscarded = state.passInfo[id].returned ? '' : conv('，或已被棄');
+    return `${conv('可能')}：${cands.map(pname).join(' / ')}${orDiscarded}`;
+  };
+
+  // Where each card I passed on can be: certain (pile came back without it and only one
+  // player could have taken it), possible (one of several players, or maybe discarded),
+  // or discarded (nobody could reach it before the draft ended).
+  const computeHoldings = () => {
+    const mine = new Set(state.mine);
+    const certain = {};
+    const possible = {};
+    const discarded = [];
+    for (const id of state.seen) {
+      if (mine.has(id) || state.played[id] || state.currentPile.includes(id) || !state.passInfo[id]) continue;
+      const cands = candidatesFor(id);
+      if (!cands.length) discarded.push(id);
+      else if (state.passInfo[id].returned && cands.length === 1) (certain[cands[0]] = certain[cands[0]] || []).push(id);
+      else for (const pid of cands) (possible[pid] = possible[pid] || []).push({ id, cands });
+    }
+    for (const list of Object.values(certain)) list.sort((a, b) => typeRank(a) - typeRank(b));
+    for (const list of Object.values(possible)) list.sort((a, b) => typeRank(a.id) - typeRank(b.id));
+    return { certain, possible, discarded };
+  };
+
+  // Ask inject.js to draw certain / possible cards next to each opponent's played cards.
+  const loadBoardOverlay = () => {
+    try {
+      return localStorage.getItem('agr-rec-board') !== 'off';
+    } catch (e) {
+      return true;
+    }
+  };
+  let boardOverlay = loadBoardOverlay();
+
+  // Possible cards with more candidates than this stay in the panel only: right after a
+  // 4-player draft most cards could be with any opponent, and drawing them all would
+  // swamp the board without telling you anything.
+  const BOARD_MAX_CANDIDATES = 2;
+
+  const pushGhosts = (holdings) => {
+    const byPlayer = {};
+    if (boardOverlay) {
+      for (const pid of Object.keys(state.players)) {
+        if (pid === state.myId) continue;
+        const items = [
+          ...(holdings.certain[pid] || []).map((id) => ({ id, status: 'certain', tip: conv('確定在他手上') })),
+          ...(holdings.possible[pid] || [])
+            .filter(({ cands }) => cands.length <= BOARD_MAX_CANDIDATES)
+            .map(({ id, cands }) => ({ id, status: 'possible', tip: possibleTip(id, cands) })),
+        ]
+          .filter((it) => state.cardData[it.id])
+          .map((it) => ({ ...it, card: state.cardData[it.id] }));
+        if (items.length) byPlayer[pid] = items;
+      }
+    }
+    window.postMessage({ source: SOURCE, kind: 'ghosts', payload: { byPlayer } }, window.location.origin);
+  };
+
   const render = () => {
     if (!panel || !state) return;
     const body = panel.querySelector('.body');
     const mine = new Set(state.mine);
     const seen = new Set(state.seen);
-
-    // Cards I saw in the draft, didn't keep, aren't in front of me now, and nobody has played yet.
-    const inPlay = (id) => mine.has(id) || state.played[id] || state.currentPile.includes(id);
-    const who = (pid) => {
-      const p = state.players[pid] || { name: pid };
-      return `<span class="dot" style="background:#${esc(p.color || '999')}"></span><span class="pname">${esc(p.name)}</span>`;
-    };
-    const names = (pids) => pids.map(who).join(' / ');
-
-    // Group the cards I passed by what we can say about them and by who could hold them.
-    const groups = { taken: new Map(), maybe: new Map(), transit: new Map() };
-    for (const id of state.seen) {
-      if (inPlay(id) || !state.passInfo[id]) continue;
-      const status = state.passInfo[id].returned ? 'taken' : state.draftOver ? 'maybe' : 'transit';
-      const cands = candidatesFor(id);
-      const key = cands.join(',');
-      if (!groups[status].has(key)) groups[status].set(key, { cands, ids: [] });
-      groups[status].get(key).ids.push(id);
-    }
-    const groupHtml = (status, label) =>
-      [...groups[status].values()].map(({ cands, ids }) => `<h5>${label(cands)}（${ids.length}）</h5>${byType(ids)}`).join('');
-    const takenHtml = groupHtml('taken', (c) => (c.length === 1 ? `確定：${names(c)}` : `${names(c)} 其中一人`));
-    const outHtml =
-      groupHtml('maybe', (c) => (c.length ? `${names(c)}，或已被棄` : '已被棄（輪抽結束前沒人拿得到）')) +
-      groupHtml('transit', (c) => `流通中，可能被 ${names(c)} 拿走`);
-
     const order = state.playerOrder.length ? state.playerOrder : Object.keys(state.players);
-    const playedHtml = order
+    const holdings = computeHoldings();
+    const { certain, possible, discarded } = holdings;
+    pushGhosts(holdings);
+
+    const playersHtml = order
       .map((pid) => {
         const p = state.players[pid] || { name: pid };
-        const ids = Object.keys(state.played).filter((id) => state.played[id] === pid);
-        const chips = ids.map((id) => cardChip(id, seen.has(id) && !mine.has(id) ? 'seen' : '')).join('');
-        return `<h5><span class="dot" style="background:#${esc(p.color || '999')}"></span><span class="pname">${esc(p.name)}</span>${pid === state.myId ? '（我）' : ''}（${ids.length}）</h5>
-          <div class="list">${chips || '<span class="empty">尚未打出</span>'}</div>`;
+        const playedIds = Object.keys(state.played).filter((id) => state.played[id] === pid).sort((a, b) => typeRank(a) - typeRank(b));
+        const certainIds = certain[pid] || [];
+        const possibleCards = possible[pid] || [];
+        const chips = [
+          ...playedIds.map((id) => cardChip(id, { status: 'played', extraClass: seen.has(id) && !mine.has(id) ? 'seen' : '' })),
+          ...certainIds.map((id) => cardChip(id, { status: 'certain', cands: [pid], tip: conv('確定在他手上') })),
+          ...possibleCards.map(({ id, cands }) => cardChip(id, { status: 'possible', cands, tip: possibleTip(id, cands) })),
+        ].join('');
+        const counts = [
+          `${BADGE.played}${playedIds.length}`,
+          pid === state.myId ? '' : `${BADGE.certain}${certainIds.length}`,
+          pid === state.myId ? '' : `${BADGE.possible}${possibleCards.length}`,
+        ].filter(Boolean).join(' ');
+        return `<h5><span class="dot" style="background:#${esc(p.color || '999')}"></span><span class="pname">${esc(p.name)}</span>${
+          pid === state.myId ? '（我）' : ''
+        }<span class="counts">${counts}</span></h5>
+          <div class="list">${chips || '<span class="empty">無</span>'}</div>`;
       })
       .join('');
 
@@ -353,12 +423,14 @@
     body.innerHTML = `
       <div class="meta">牌桌 #${esc(state.tableId)} · ${draftStatus} · 看過 ${state.seen.length} 張</div>
       ${notes.map((n) => `<div class="meta">⚠ ${esc(n)}</div>`).join('')}
-      <h4>被拿走（牌堆傳回來時少了，還沒打出）</h4>
-      ${takenHtml || '<div class="empty">無</div>'}
-      <h4>去向未明（我傳出、還沒傳回來）</h4>
-      ${outHtml || '<div class="empty">無</div>'}
-      <h4>已打出（綠框 = 我在輪抽看過）</h4>
-      ${playedHtml}
+      <div class="legend">
+        <span><i class="badge b-played">${BADGE.played}</i>已打出</span>
+        <span><i class="badge b-certain">${BADGE.certain}</i>確定在手上</span>
+        <span><i class="badge b-possible">${BADGE.possible}</i>可能在手上</span>
+      </div>
+      <h4>玩家（滑鼠移到牌上看候選；綠框 = 我在輪抽看過）</h4>
+      ${playersHtml}
+      ${discarded.length ? `<h4>已被棄（${discarded.length}）</h4>${byType(discarded)}` : ''}
       <h4>我的牌（${state.mine.length}）</h4>
       ${state.mine.length ? byType(state.mine) : '<div class="empty">無</div>'}
     `;
@@ -383,7 +455,7 @@
   // character by character. Card and player names are left as BGA provides them.
 
   const T2S = Object.fromEntries(
-    [...'來来傳传匯汇學学張张戰战時时暫暂業业棄弃沒没無无發发確确紀纪結结給给綠绿職职觀观記记認认讀读資资輪轮這这過过還还錄录換换體体簡简']
+    [...'來来傳传匯汇學学張张戰战時时暫暂業业棄弃沒没無无發发確确紀纪結结給给綠绿職职觀观記记認认讀读資资輪轮這这過过還还錄录換换體体簡简選选顯显隱隐測测']
       .reduce((pairs, c, i, arr) => (i % 2 ? pairs : [...pairs, [c, arr[i + 1]]]), [])
   );
 
@@ -402,6 +474,7 @@
     ['紀錄', '记录'],
     ['資料', '数据'],
     ['收合', '收起'],
+    ['滑鼠', '鼠标'],
   ];
 
   const conv = (s) => {
@@ -436,6 +509,7 @@
       <div class="wrap">
         <div class="head"><b data-tw="🌾 記牌器"></b>
           <button data-act="lang" data-tw="切換繁體 / 簡體"></button>
+          <button data-act="board" data-tw="在農場上顯示 / 隱藏推測的牌">🃏</button>
           <button data-act="resync" data-tw="重新讀取牌桌資料">↻</button>
           <button data-act="export" data-tw="匯出 JSON">⤓</button>
           <button data-act="reset" data-tw="清除本桌紀錄">✕</button>
@@ -452,19 +526,36 @@
         else el.textContent = conv(el.dataset.tw);
       }
       root.querySelector('[data-act="lang"]').textContent = lang === 'cn' ? '繁' : '简';
+      root.querySelector('[data-act="board"]').style.opacity = boardOverlay ? '1' : '.4';
     };
     localizeHeader();
 
-    const pos = loadPos() || { left: 12, top: 80, collapsed: false };
+    const pos = loadPos() || { left: 12, top: 80 };
     panel.style.left = pos.left + 'px';
     panel.style.top = pos.top + 'px';
-    panel.classList.toggle('collapsed', !!pos.collapsed);
+
+    // Collapsed by default: the board overlay is the main view. Stored on its own key so an
+    // older saved "expanded" position doesn't override the new default.
+    let collapsed = true;
+    try {
+      collapsed = localStorage.getItem('agr-rec-collapsed') !== 'no';
+    } catch (err) {}
+    panel.classList.toggle('collapsed', collapsed);
 
     root.querySelector('.head').addEventListener('click', (e) => {
       const act = e.target.dataset && e.target.dataset.act;
       if (act === 'toggle') {
         panel.classList.toggle('collapsed');
-        savePos({ ...pos, collapsed: panel.classList.contains('collapsed') });
+        try {
+          localStorage.setItem('agr-rec-collapsed', panel.classList.contains('collapsed') ? 'yes' : 'no');
+        } catch (err) {}
+      } else if (act === 'board') {
+        boardOverlay = !boardOverlay;
+        try {
+          localStorage.setItem('agr-rec-board', boardOverlay ? 'on' : 'off');
+        } catch (err) {}
+        localizeHeader();
+        render();
       } else if (act === 'lang') {
         lang = lang === 'cn' ? 'tw' : 'cn';
         try {
@@ -501,7 +592,7 @@
       const up = () => {
         window.removeEventListener('mousemove', move);
         window.removeEventListener('mouseup', up);
-        savePos({ ...pos, collapsed: panel.classList.contains('collapsed') });
+        savePos(pos);
       };
       window.addEventListener('mousemove', move);
       window.addEventListener('mouseup', up);
@@ -539,6 +630,9 @@
     } else if (kind === 'notif') {
       if (!state) return; // snapshot always comes first; ignore strays
       applyNotif(payload);
+    } else if (kind === 'cardData') {
+      if (!state) return;
+      for (const c of payload.cards) state.cardData[c.id] = c;
     }
     save();
     render();
@@ -546,7 +640,7 @@
 
   window.addEventListener('message', (e) => {
     if (e.source !== window || !e.data || e.data.source !== SOURCE) return;
-    if (e.data.kind !== 'snapshot' && e.data.kind !== 'notif') return;
+    if (!['snapshot', 'notif', 'cardData'].includes(e.data.kind)) return;
     queue = queue.then(() => handle(e.data)).catch((err) => console.warn('[agr-rec] handler error', err));
   });
 })();
