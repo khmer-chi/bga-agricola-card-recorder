@@ -158,6 +158,20 @@
     .agr-played-host { position: relative; }
     .agr-round.agr-played-round { background: #2f5d8a; }
     .agr-round.agr-first-pick { background: #c9952b; color: #2b1d05; }
+    .agr-ghost.agr-guessed { outline: 3px solid #7b4bb3; outline-offset: -2px; border-radius: 8px; }
+    .agr-ghost.agr-by-guess { outline: 2px dashed #7b4bb3; outline-offset: -2px; border-radius: 8px; }
+    .agr-ghost.agr-by-guess .agr-badge, .agr-badge.b-guessed { background: #7b4bb3; }
+    .agr-guess-btn { position: absolute; bottom: 4px; right: 4px; z-index: 6; display: none; padding: 1px 7px; border-radius: 10px;
+      background: #7b4bb3; color: #fff; font: bold 12px/18px sans-serif; cursor: pointer; white-space: nowrap;
+      box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+    .agr-ghost:hover .agr-guess-btn, .agr-ghost.agr-guessed .agr-guess-btn { display: block; }
+    .agr-guess-menu { position: absolute; bottom: 26px; right: 4px; z-index: 7; padding: 4px; border-radius: 8px; background: #fbf6ea;
+      border: 1px solid #7b4bb3; box-shadow: 0 2px 8px rgba(0,0,0,.35); font: 12px sans-serif; color: #2b2116; }
+    .agr-guess-menu div { padding: 3px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+    .agr-guess-menu div:hover { background: #e8dcf5; }
+    .agr-guess-menu .agr-guess-menu-title { cursor: default; font-weight: bold; color: #7b4bb3; }
+    .agr-guess-menu .agr-guess-menu-title:hover { background: none; }
+    #agr-pool .agr-pool-cards .agr-guess-btn, #agr-pool .agr-pool-cards .agr-guess-menu { zoom: 1.667; }
     .agr-badge.b-certain { background: #b03a2e; }
     .agr-badge.b-possible { background: #8a7a5c; }
     .agr-ghost-tip { font-weight: bold; margin-bottom: 4px; }
@@ -170,7 +184,39 @@
     /* ...but keep the round tag and badge readable (zoom multiplies: .6 x 1.667 = 1). */
     #agr-pool .agr-pool-cards .agr-round, #agr-pool .agr-pool-cards .agr-badge { zoom: 1.667; }
   `;
-  const GHOST_BADGE = { certain: '★', possible: '?' };
+  const GHOST_BADGE = { certain: '★', possible: '?', guessed: '✎' };
+  let guessLabels = { guess: '✎', unguess: '✕', pick: '' };
+
+  const sendGuess = (id, pid) => window.postMessage({ source: SOURCE, kind: 'guess', payload: { id, pid } }, window.location.origin);
+
+  // The ✎ button: on a player's board it guesses that player; in the shared pool it opens a
+  // menu of the candidates; on a guessed card it clears the guess.
+  const addGuessButton = (el, { id, status, cands }, pid) => {
+    const btn = document.createElement('div');
+    btn.className = 'agr-guess-btn';
+    btn.textContent = status === 'guessed' ? guessLabels.unguess : guessLabels.guess;
+    btn.addEventListener('click', (evt) => {
+      evt.stopPropagation(); // don't zoom the card
+      if (status === 'guessed') return sendGuess(id, null);
+      if (pid) return sendGuess(id, pid);
+      const old = el.querySelector('.agr-guess-menu');
+      if (old) return old.remove();
+      const menu = document.createElement('div');
+      menu.className = 'agr-guess-menu';
+      menu.innerHTML = `<div class="agr-guess-menu-title">${esc(guessLabels.pick)}</div>`;
+      for (const c of cands || []) {
+        const row = document.createElement('div');
+        row.textContent = c.name;
+        row.addEventListener('click', (e2) => {
+          e2.stopPropagation();
+          sendGuess(id, c.pid);
+        });
+        menu.appendChild(row);
+      }
+      el.appendChild(menu);
+    });
+    el.appendChild(btn);
+  };
 
   let ghostSpec = {}; // pid -> [{ id, status, tip, round, card }]
   let poolSpec = []; // [{ id, status, tip, card }]: cards any opponent may hold
@@ -212,7 +258,8 @@
   };
 
   // Appends one inferred card, drawn with BGA's own template, to `container`.
-  const addGhost = (g, container, { id, status, tip, round, card }) => {
+  const addGhost = (g, container, item, pid = null) => {
+    const { id, status, tip, round, card, byGuess } = item;
     if (document.getElementById(id)) return; // BGA already shows the real card
     try {
       const c = { ...card, mini: true, location: 'inPlay' };
@@ -222,6 +269,7 @@
       el.id = 'agr-ghost-' + id;
       el.dataset.id = 'agr-ghost-' + id;
       el.classList.add('agr-ghost', 'agr-' + status, 'mini');
+      if (byGuess) el.classList.add('agr-by-guess');
       const badge = document.createElement('div');
       badge.className = 'agr-badge b-' + status;
       badge.textContent = GHOST_BADGE[status] || '';
@@ -233,6 +281,7 @@
         tag.textContent = round;
         el.appendChild(tag);
       }
+      if (status === 'possible' || status === 'guessed') addGuessButton(el, item, pid);
       container.appendChild(el);
       // Same hover tooltip and click-to-zoom as BGA wires up for real cards in addCard().
       const tooltip = `<div class="agr-ghost-tip">${esc(tip)}</div>` + g.tplPlayerCard({ ...card }, true);
@@ -262,7 +311,7 @@
     for (const [pid, items] of Object.entries(ghostSpec)) {
       const wrapper = document.getElementById('cards-wrapper-' + pid);
       if (!wrapper) continue;
-      for (const item of items) addGhost(g, wrapper, item);
+      for (const item of items) addGhost(g, wrapper, item, pid);
     }
     // Cards any opponent may hold: one shared block under the central action board.
     const column = document.getElementById('player-boards-left-column');
@@ -310,6 +359,7 @@
           poolSpec = next.pool;
           poolTitle = next.title;
           playedTags = e.data.payload.playedTags || {};
+          if (e.data.payload.guessLabels) guessLabels = e.data.payload.guessLabels;
           applyPlayedTags();
           if (!unchanged || document.querySelectorAll('.agr-ghost').length !== ghostCount()) renderGhosts(g);
         }

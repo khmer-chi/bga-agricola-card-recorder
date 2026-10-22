@@ -38,6 +38,7 @@
     played: {}, // id -> player id who played it
     cardData: {}, // id -> full BGA card object, so the board overlay can render it after a reload
     myPicks: {}, // id -> draft round in which I took it
+    guesses: {}, // id -> player id I *guess* took it; used as a hypothesis, never as fact
     draftOver: false,
     updatedAt: 0,
   });
@@ -133,9 +134,14 @@
     return Array.from({ length: n - 1 }, (_, j) => order[(((i + state.direction * (j + 1)) % n) + n) % n]);
   };
 
+  // The pile a card I passed on was in, as far as the exclusion rule is concerned.
+  const groupOf = (id) => state.returnedGroups.find((g) => g.ids.includes(id)) || state.passedPiles.find((p) => p.ids.includes(id));
+  const typeOf = (id) => state.cards[id] && state.cards[id].type;
+
   // Who could hold a card I passed on: the players the pile can reach before it
-  // returns to me or the draft ends.
-  const candidatesFor = (id) => {
+  // returns to me or the draft ends. With `useGuesses`, my guesses count like plays:
+  // a guessed card is with the guessed player, who is ruled out for its pile-mates.
+  const candidatesFor = (id, useGuesses = true) => {
     const info = state.passInfo[id];
     const succ = successors();
     if (!info) return succ;
@@ -145,17 +151,54 @@
 
     // Each player takes exactly one card of a type from a pile per turn (when the quota is 1).
     // So if someone played another same-type card from the same pile, they can't hold this one.
-    const type = state.cards[id] && state.cards[id].type;
+    const type = typeOf(id);
     if (state.pickQuota && state.pickQuota[type] === 1) {
-      const group = state.returnedGroups.find((g) => g.ids.includes(id)) || state.passedPiles.find((p) => p.ids.includes(id));
+      const group = groupOf(id);
       if (group) {
-        const excluded = group.ids
-          .filter((o) => o !== id && state.played[o] && state.cards[o] && state.cards[o].type === type)
-          .map((o) => state.played[o]);
+        const holderOf = (o) => state.played[o] || (useGuesses && state.guesses[o]);
+        const excluded = group.ids.filter((o) => o !== id && holderOf(o) && typeOf(o) === type).map(holderOf);
         cands = cands.filter((pid) => !excluded.includes(pid));
       }
     }
+    const guess = useGuesses && state.guesses[id];
+    if (guess && cands.includes(guess)) return [guess];
     return cands;
+  };
+
+  // Drop guesses that facts have since contradicted; returns a note for each one dropped.
+  const pruneGuesses = () => {
+    const notes = [];
+    for (const [id, pid] of Object.entries(state.guesses)) {
+      const name = (state.players[pid] || { name: pid }).name;
+      const card = (state.cards[id] && state.cards[id].name) || id;
+      if (state.played[id]) {
+        if (state.played[id] !== pid) {
+          const by = (state.players[state.played[id]] || { name: state.played[id] }).name;
+          notes.push(conv(`猜錯了：你猜 ${name} 有「${card}」，但 ${by} 打出了它`));
+        }
+        delete state.guesses[id];
+      } else if (state.mine.includes(id) || !candidatesFor(id, false).includes(pid)) {
+        notes.push(conv(`「${card}」不可能在 ${name} 手上了，已取消這個猜測`));
+        delete state.guesses[id];
+      }
+    }
+    return notes;
+  };
+
+  // Guess that `pid` took card `id` (or clear the guess with pid = null). A player takes one
+  // card of each type per pile, so guessing him for one card replaces any earlier guess of
+  // him for a same-type card of the same pile.
+  const setGuess = (id, pid) => {
+    if (!pid) {
+      delete state.guesses[id];
+      return;
+    }
+    if (!candidatesFor(id, false).includes(pid)) return; // he can't have it
+    const group = groupOf(id);
+    for (const [o, p] of Object.entries(state.guesses)) {
+      if (o !== id && p === pid && group && group.ids.includes(o) && typeOf(o) === typeOf(id)) delete state.guesses[o];
+    }
+    state.guesses[id] = pid;
   };
 
   // `byPlayer` comes from args.player_id: for buyAndPassCard the card object already
@@ -289,6 +332,13 @@
     .b-played { background: #3a7d44; }
     .b-certain { background: #b03a2e; }
     .b-possible { background: #8a7a5c; }
+    .b-guessed { background: #7b4bb3; }
+    .card.guessed { border-color: #7b4bb3; box-shadow: inset 0 0 0 1px #7b4bb3; }
+    .card.by-guess { border-color: #7b4bb3; }
+    .card.by-guess .badge { background: #7b4bb3; }
+    .toast { position: fixed; z-index: 2147483001; left: 50%; top: 12px; transform: translateX(-50%); max-width: 420px;
+      padding: 8px 12px; border-radius: 8px; background: #4a2f70; color: #fff; font: 13px/1.4 -apple-system, "PingFang TC", sans-serif;
+      box-shadow: 0 4px 14px rgba(0,0,0,.3); }
     .legend { display: flex; gap: 10px; margin: 2px 0 4px; color: #7a6548; }
     .legend .badge { position: static; display: inline-block; margin-right: 3px; vertical-align: -2px; }
     .counts { font-weight: normal; margin-left: 4px; }
@@ -301,7 +351,7 @@
   `;
 
   // Status badges in a card's top-right corner.
-  const BADGE = { played: '✓', certain: '★', possible: '?' };
+  const BADGE = { played: '✓', certain: '★', possible: '?', guessed: '✎' };
 
   // `status` drives the badge; data-* attributes describe the claim for tests and tooling.
   const cardChip = (id, { extraClass = '', status = '', cands = null, tip = '', round = '' } = {}) => {
@@ -358,18 +408,29 @@
   // Where each card I passed on can be: certain (pile came back without it and only one
   // player could have taken it), possible (one of several players, or maybe discarded),
   // or discarded (nobody could reach it before the draft ended).
+  // Results that only hold because of my guesses are flagged in `byGuess`, so they're never
+  // shown like facts; `guessed` holds the guessed cards themselves.
   const computeHoldings = () => {
     const mine = new Set(state.mine);
     const certain = {};
     const possible = {};
+    const guessed = {};
     const discarded = [];
+    const byGuess = new Set();
     for (const id of state.seen) {
       if (mine.has(id) || state.played[id] || state.currentPile.includes(id) || !state.passInfo[id]) continue;
       const cands = candidatesFor(id);
+      const g = state.guesses[id];
+      if (g && cands.length === 1 && cands[0] === g) {
+        (guessed[g] = guessed[g] || []).push(id);
+        continue;
+      }
+      if (cands.join() !== candidatesFor(id, false).join()) byGuess.add(id);
       if (!cands.length) discarded.push(id);
       else if (state.passInfo[id].returned && cands.length === 1) (certain[cands[0]] = certain[cands[0]] || []).push(id);
       else for (const pid of cands) (possible[pid] = possible[pid] || []).push({ id, cands });
     }
+    for (const list of Object.values(guessed)) list.sort((a, b) => typeRank(a) - typeRank(b));
     for (const list of Object.values(certain)) list.sort((a, b) => typeRank(a) - typeRank(b));
     for (const list of Object.values(possible)) list.sort((a, b) => typeRank(a.id) - typeRank(b.id));
 
@@ -382,8 +443,11 @@
     for (const [pid, list] of Object.entries(possible)) for (const { id } of list) sizes[groupKey(id, pid)] = (sizes[groupKey(id, pid)] || 0) + 1;
     const choiceOf = (id, pid) => sizes[groupKey(id, pid)] || 1;
 
-    return { certain, possible, discarded, choiceOf };
+    return { certain, possible, guessed, discarded, byGuess, choiceOf };
   };
+
+  const guessTip = (id) => `${conv('你猜在他手上')}${passLabel(id) ? `（${passLabel(id)}）` : ''}`;
+  const BY_GUESS = () => conv('（依你的猜測）');
 
   // Ask inject.js to draw certain / possible cards next to each opponent's played cards.
   const loadBoardOverlay = () => {
@@ -442,15 +506,17 @@
     if (boardOverlay) {
       for (const pid of Object.keys(state.players)) {
         if (pid === state.myId) continue;
+        const flag = (id, tip) => (holdings.byGuess.has(id) ? { byGuess: true, tip: tip + BY_GUESS() } : { tip });
         const items = [
-          ...(holdings.certain[pid] || []).map((id) => ({ id, status: 'certain', tip: certainTip(id), round: passLabel(id) })),
+          ...(holdings.guessed[pid] || []).map((id) => ({ id, status: 'guessed', tip: guessTip(id), round: passLabel(id) })),
+          ...(holdings.certain[pid] || []).map((id) => ({ id, status: 'certain', round: passLabel(id), ...flag(id, certainTip(id)) })),
           ...(holdings.possible[pid] || [])
             .filter(({ cands }) => cands.length <= BOARD_MAX_CANDIDATES)
             .map(({ id, cands }) => ({
               id,
               status: 'possible',
-              tip: possibleTip(id, cands, holdings.choiceOf),
               round: roundLabel(id, pid, holdings.choiceOf(id, pid)),
+              ...flag(id, possibleTip(id, cands, holdings.choiceOf)),
             })),
         ]
           .filter((it) => state.cardData[it.id])
@@ -468,7 +534,15 @@
           if (cands.length <= BOARD_MAX_CANDIDATES || seenIds.has(id) || !state.cardData[id]) continue;
           seenIds.add(id);
           const round = passLabel(id);
-          pool.push({ id, status: 'possible', tip: possibleTip(id, cands, holdings.choiceOf), round, card: state.cardData[id] });
+          pool.push({
+            id,
+            status: 'possible',
+            tip: possibleTip(id, cands, holdings.choiceOf) + (holdings.byGuess.has(id) ? BY_GUESS() : ''),
+            byGuess: holdings.byGuess.has(id),
+            round,
+            cands: cands.map((pid) => ({ pid, name: pname(pid) })), // for the guess menu
+            card: state.cardData[id],
+          });
         }
       }
       const passTurn = (id) => (state.passInfo[id] && state.passInfo[id].turn) || 0;
@@ -486,7 +560,11 @@
         if (!playedTags[id] && myLabel(id)) playedTags[id] = myLabel(id);
       }
     }
-    window.postMessage({ source: SOURCE, kind: 'ghosts', payload: { byPlayer, pool, poolTitle, playedTags } }, window.location.origin);
+    const guessLabels = { guess: conv('✎ 猜是他的'), unguess: conv('取消猜測'), pick: conv('猜是誰的：') };
+    window.postMessage(
+      { source: SOURCE, kind: 'ghosts', payload: { byPlayer, pool, poolTitle, playedTags, guessLabels } },
+      window.location.origin
+    );
   };
 
   const render = () => {
@@ -505,7 +583,11 @@
         const playedIds = Object.keys(state.played).filter((id) => state.played[id] === pid).sort((a, b) => typeRank(a) - typeRank(b));
         const certainIds = certain[pid] || [];
         const possibleCards = possible[pid] || [];
+        const guessedIds = holdings.guessed[pid] || [];
+        const guessClass = (id) => (holdings.byGuess.has(id) ? 'by-guess' : '');
+        const guessNote = (id) => (holdings.byGuess.has(id) ? BY_GUESS() : '');
         const chips = [
+          ...guessedIds.map((id) => cardChip(id, { status: 'guessed', cands: [pid], tip: guessTip(id) })),
           ...playedIds.map((id) =>
             cardChip(id, {
               status: 'played',
@@ -514,13 +596,18 @@
               round: pid === state.myId ? myLabel(id) : playedLabel(id, pid),
             })
           ),
-          ...certainIds.map((id) => cardChip(id, { status: 'certain', cands: [pid], tip: certainTip(id, pid) })),
-          ...possibleCards.map(({ id, cands }) => cardChip(id, { status: 'possible', cands, tip: possibleTip(id, cands, holdings.choiceOf) })),
+          ...certainIds.map((id) =>
+            cardChip(id, { status: 'certain', cands: [pid], extraClass: guessClass(id), tip: certainTip(id) + guessNote(id) })
+          ),
+          ...possibleCards.map(({ id, cands }) =>
+            cardChip(id, { status: 'possible', cands, extraClass: guessClass(id), tip: possibleTip(id, cands, holdings.choiceOf) + guessNote(id) })
+          ),
         ].join('');
         const counts = [
           `${BADGE.played}${playedIds.length}`,
           pid === state.myId ? '' : `${BADGE.certain}${certainIds.length}`,
           pid === state.myId ? '' : `${BADGE.possible}${possibleCards.length}`,
+          guessedIds.length ? `${BADGE.guessed}${guessedIds.length}` : '',
         ].filter(Boolean).join(' ');
         return `<h5><span class="dot" style="background:#${esc(p.color || '999')}"></span><span class="pname">${esc(p.name)}</span>${
           pid === state.myId ? '（我）' : ''
@@ -543,6 +630,7 @@
         <span><i class="badge b-played">${BADGE.played}</i>已打出</span>
         <span><i class="badge b-certain">${BADGE.certain}</i>確定在手上</span>
         <span><i class="badge b-possible">${BADGE.possible}</i>可能在手上</span>
+        <span><i class="badge b-guessed">${BADGE.guessed}</i>你的猜測</span>
       </div>
       <h4>玩家（滑鼠移到牌上看候選；綠框 = 我在輪抽看過）</h4>
       ${playersHtml}
@@ -571,7 +659,7 @@
   // character by character. Card and player names are left as BGA provides them.
 
   const T2S = Object.fromEntries(
-    [...'來来傳传匯汇學学張张戰战時时暫暂業业棄弃沒没無无發发確确紀纪結结給给綠绿職职觀观記记認认讀读資资輪轮這这過过還还錄录換换體体簡简選选顯显隱隐測测個个對对']
+    [...'來来傳传匯汇學学張张戰战時时暫暂業业棄弃沒没無无發发確确紀纪結结給给綠绿職职觀观記记認认讀读資资輪轮這这過过還还錄录換换體体簡简選选顯显隱隐測测個个對对誰谁錯错']
       .reduce((pairs, c, i, arr) => (i % 2 ? pairs : [...pairs, [c, arr[i + 1]]]), [])
   );
 
@@ -749,14 +837,31 @@
     } else if (kind === 'cardData') {
       if (!state) return;
       for (const c of payload.cards) state.cardData[c.id] = c;
+    } else if (kind === 'guess') {
+      // From the ✎ buttons on the board overlay (inject.js).
+      if (!state) return;
+      setGuess(payload.id, payload.pid || null);
     }
+    if (state) pruneGuesses().forEach(showToast);
     save();
     render();
   };
 
+  // Short notice at the top of the page, e.g. when a play contradicts one of my guesses.
+  const showToast = (text) => {
+    console.log('[agr-rec]', text);
+    const root = panel && panel.getRootNode && panel.getRootNode();
+    if (!root || !root.appendChild) return;
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = text;
+    root.appendChild(el);
+    setTimeout(() => el.remove(), 7000);
+  };
+
   window.addEventListener('message', (e) => {
     if (e.source !== window || !e.data || e.data.source !== SOURCE) return;
-    if (!['snapshot', 'notif', 'cardData'].includes(e.data.kind)) return;
+    if (!['snapshot', 'notif', 'cardData', 'guess'].includes(e.data.kind)) return;
     queue = queue.then(() => handle(e.data)).catch((err) => console.warn('[agr-rec] handler error', err));
   });
 })();
