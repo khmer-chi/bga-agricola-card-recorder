@@ -321,10 +321,23 @@
 
   const pname = (pid) => (state.players[pid] || { name: pid }).name;
   const typeRank = (id) => ({ occupation: 0, minor: 1, major: 2 })[state.cards[id] && state.cards[id].type] ?? 3;
+  // The draft turn in which `pid` would have taken card `id`: a pile I pass on in turn t
+  // reaches the k-th player after me in turn t + k.
+  const roundFor = (id, pid) => {
+    const info = state.passInfo[id];
+    const k = successors().indexOf(pid);
+    return info && info.turn != null && k >= 0 ? info.turn + k + 1 : null;
+  };
+  const roundLabel = (id, pid) => {
+    const r = roundFor(id, pid);
+    return r == null ? '' : conv(`第${r}輪`);
+  };
   const possibleTip = (id, cands) => {
     const orDiscarded = state.passInfo[id].returned ? '' : conv('，或已被棄');
-    return `${conv('可能')}：${cands.map(pname).join(' / ')}${orDiscarded}`;
+    const who = cands.map((pid) => `${pname(pid)}${roundLabel(id, pid) ? `（${roundLabel(id, pid)}）` : ''}`);
+    return `${conv('可能')}：${who.join(' / ')}${orDiscarded}`;
   };
+  const certainTip = (id, pid) => `${conv('確定在他手上')}${roundLabel(id, pid) ? `（${roundLabel(id, pid)}${conv('選走')}）` : ''}`;
 
   // Where each card I passed on can be: certain (pile came back without it and only one
   // player could have taken it), possible (one of several players, or maybe discarded),
@@ -367,10 +380,10 @@
       for (const pid of Object.keys(state.players)) {
         if (pid === state.myId) continue;
         const items = [
-          ...(holdings.certain[pid] || []).map((id) => ({ id, status: 'certain', tip: conv('確定在他手上') })),
+          ...(holdings.certain[pid] || []).map((id) => ({ id, status: 'certain', tip: certainTip(id, pid), round: roundLabel(id, pid) })),
           ...(holdings.possible[pid] || [])
             .filter(({ cands }) => cands.length <= BOARD_MAX_CANDIDATES)
-            .map(({ id, cands }) => ({ id, status: 'possible', tip: possibleTip(id, cands) })),
+            .map(({ id, cands }) => ({ id, status: 'possible', tip: possibleTip(id, cands), round: roundLabel(id, pid) })),
         ]
           .filter((it) => state.cardData[it.id])
           .map((it) => ({ ...it, card: state.cardData[it.id] }));
@@ -398,7 +411,7 @@
         const possibleCards = possible[pid] || [];
         const chips = [
           ...playedIds.map((id) => cardChip(id, { status: 'played', extraClass: seen.has(id) && !mine.has(id) ? 'seen' : '' })),
-          ...certainIds.map((id) => cardChip(id, { status: 'certain', cands: [pid], tip: conv('確定在他手上') })),
+          ...certainIds.map((id) => cardChip(id, { status: 'certain', cands: [pid], tip: certainTip(id, pid) })),
           ...possibleCards.map(({ id, cands }) => cardChip(id, { status: 'possible', cands, tip: possibleTip(id, cands) })),
         ].join('');
         const counts = [

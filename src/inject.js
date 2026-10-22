@@ -151,6 +151,8 @@
     .agr-ghost.agr-certain { outline: 2px solid #b03a2e; outline-offset: -2px; border-radius: 8px; }
     .agr-badge { position: absolute; top: -6px; right: -6px; z-index: 5; width: 22px; height: 22px; border-radius: 50%;
       color: #fff; font: bold 14px/22px sans-serif; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.4); pointer-events: none; }
+    .agr-round { position: absolute; top: -6px; left: -6px; z-index: 5; padding: 0 5px; border-radius: 8px; background: #6b4f2a;
+      color: #fff; font: bold 11px/16px sans-serif; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,.4); pointer-events: none; }
     .agr-badge.b-certain { background: #b03a2e; }
     .agr-badge.b-possible { background: #8a7a5c; }
     .agr-ghost-tip { font-weight: bold; margin-bottom: 4px; }
@@ -182,7 +184,7 @@
     for (const [pid, items] of Object.entries(ghostSpec)) {
       const wrapper = document.getElementById('cards-wrapper-' + pid);
       if (!wrapper) continue;
-      for (const { id, status, tip, card } of items) {
+      for (const { id, status, tip, round, card } of items) {
         if (document.getElementById(id)) continue; // BGA already shows the real card
         try {
           const c = { ...card, mini: true, location: 'inPlay' };
@@ -196,6 +198,13 @@
           badge.className = 'agr-badge b-' + status;
           badge.textContent = GHOST_BADGE[status] || '';
           el.appendChild(badge);
+          if (round) {
+            // The draft turn in which this player would have taken the card.
+            const tag = document.createElement('div');
+            tag.className = 'agr-round';
+            tag.textContent = round;
+            el.appendChild(tag);
+          }
           wrapper.appendChild(el);
           if (g.addTooltipHtml) g.addTooltipHtml(el.id, `<div class="agr-ghost-tip">${esc(tip)}</div>` + g.tplPlayerCard({ ...card }, true));
         } catch (e) {
