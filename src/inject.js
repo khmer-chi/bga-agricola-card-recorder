@@ -171,7 +171,6 @@
     .agr-guess-menu div:hover { background: #e8dcf5; }
     .agr-guess-menu .agr-guess-menu-title { cursor: default; font-weight: bold; color: #7b4bb3; }
     .agr-guess-menu .agr-guess-menu-title:hover { background: none; }
-    #agr-pool .agr-pool-cards .agr-guess-btn, #agr-pool .agr-pool-cards .agr-guess-menu { zoom: 1.667; }
     .agr-badge.b-certain { background: #b03a2e; }
     .agr-badge.b-possible { background: #8a7a5c; }
     .agr-ghost-tip { font-weight: bold; margin-bottom: 4px; }
@@ -181,8 +180,12 @@
     #agr-pool .agr-pool-cards { display: flex; flex-wrap: wrap; gap: 14px 8px; }
     /* Shrunk: these say least about any one opponent; hovering still shows the full card. */
     #agr-pool .agr-pool-cards .player-card { zoom: .6; }
-    /* ...but keep the round tag and badge readable (zoom multiplies: .6 x 1.667 = 1). */
-    #agr-pool .agr-pool-cards .agr-round, #agr-pool .agr-pool-cards .agr-badge { zoom: 1.667; }
+    /* Each pool card sits in an unzoomed wrapper holding its tag, badge and ✎ button, so
+       they keep their size and their click targets line up (nested zoom breaks hit testing). */
+    #agr-pool .agr-pool-item { position: relative; }
+    #agr-pool .agr-pool-item:hover .agr-guess-btn { display: block; }
+    /* BGA sets pointer-events: none on the player-boards layout, so the pool must opt back in. */
+    #agr-pool { pointer-events: auto; }
   `;
   const GHOST_BADGE = { certain: '★', possible: '?', guessed: '✎' };
   let guessLabels = { guess: '✎', unguess: '✕', pick: '' };
@@ -199,7 +202,9 @@
       evt.stopPropagation(); // don't zoom the card
       if (status === 'guessed') return sendGuess(id, null);
       if (pid) return sendGuess(id, pid);
-      const old = el.querySelector('.agr-guess-menu');
+      // The button may have been moved to a wrapper (pool cards): put the menu next to it.
+      const host = btn.parentElement;
+      const old = host.querySelector('.agr-guess-menu');
       if (old) return old.remove();
       const menu = document.createElement('div');
       menu.className = 'agr-guess-menu';
@@ -213,7 +218,7 @@
         });
         menu.appendChild(row);
       }
-      el.appendChild(menu);
+      host.appendChild(menu);
     });
     el.appendChild(btn);
   };
@@ -321,7 +326,19 @@
       pool.innerHTML = `<div class="agr-pool-title">? ${esc(poolTitle)}</div><div class="agr-pool-cards"></div>`;
       column.appendChild(pool);
       const cards = pool.querySelector('.agr-pool-cards');
-      for (const item of poolSpec) addGhost(g, cards, item);
+      for (const item of poolSpec) {
+        const wrap = document.createElement('div');
+        wrap.className = 'agr-pool-item';
+        cards.appendChild(wrap);
+        addGhost(g, wrap, item);
+        const el = wrap.querySelector('.agr-ghost');
+        if (!el) {
+          wrap.remove();
+          continue;
+        }
+        // Lift the overlays out of the zoomed card (see the .agr-pool-item CSS).
+        for (const part of el.querySelectorAll(':scope > .agr-badge, :scope > .agr-round, :scope > .agr-guess-btn')) wrap.appendChild(part);
+      }
     }
     // Player boards have a JS-computed fixed height; recompute it so extra cards push the
     // next row down instead of overlapping it.
