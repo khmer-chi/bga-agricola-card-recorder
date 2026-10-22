@@ -5,6 +5,8 @@
   window.__agrRecContent = true;
 
   const SOURCE = 'agr-rec';
+  // Firefox exposes promise-based APIs as `browser`; Chrome as `chrome`.
+  const ext = globalThis.browser || globalThis.chrome;
   const TYPE_LABEL = { occupation: '職業卡', minor: '次要發展卡', major: '主要發展卡' };
 
   let state = null;
@@ -64,7 +66,7 @@
 
   const load = async (key) => {
     try {
-      const res = await chrome.storage.local.get(key);
+      const res = await ext.storage.local.get(key);
       return res[key] || null;
     } catch (e) {
       console.warn('[agr-rec] load failed', e);
@@ -77,7 +79,7 @@
     clearTimeout(saveTimer);
     saveTimer = null;
     state.updatedAt = Date.now();
-    chrome.storage.local.set({ [storageKey]: state }).catch((e) => console.warn('[agr-rec] save failed', e));
+    ext.storage.local.set({ [storageKey]: state }).catch((e) => console.warn('[agr-rec] save failed', e));
   };
   const save = () => {
     if (!storageKey) return;
@@ -809,9 +811,15 @@
   let devPing = null;
   const startDevPing = () => {
     if (devPing) return;
+    // Builds without the dev background worker (e.g. Firefox) have nobody to ping.
+    try {
+      if (!ext.runtime.getManifest().background) return;
+    } catch (e) {
+      return;
+    }
     devPing = setInterval(() => {
       try {
-        chrome.runtime.sendMessage({ type: 'agr-dev-check' }).catch(() => {});
+        ext.runtime.sendMessage({ type: 'agr-dev-check' }).catch(() => {});
       } catch (e) {
         clearInterval(devPing);
       }

@@ -74,6 +74,20 @@ Board Game Arena（BGA）農家樂（Agricola）的 Chrome 擴充功能。幫你
 
 **更新方法**：下載新版 ZIP，覆蓋原來的資料夾，再到擴充功能管理頁點這個擴充功能的重新整理按鈕。
 
+## 在 Android 手機上使用（Firefox）
+
+Android 版的 Chrome 不支援擴充功能，所以手機上要改用 **Firefox for Android**（128 版以上）。Firefox 正式版只接受經過 Mozilla 簽署的擴充功能，所以要先簽署一次：
+
+1. **打包**：在專案資料夾執行 `./scripts/build-firefox.sh`，會產生 `dist/bga-agricola-card-recorder-firefox.zip`。
+2. **（建議）先在電腦版 Firefox 試用**：網址列輸入 `about:debugging#/runtime/this-firefox`，點「載入暫用附加元件」，選 `dist/firefox/manifest.json`。關掉 Firefox 後就會移除。
+3. **簽署**：用 Mozilla 帳號登入 [addons.mozilla.org 開發者中心](https://addons.mozilla.org/developers/)，選「提交新附加元件」→「自行發布」（不上架到商店），上傳上面的 ZIP。通過自動審查後，下載簽署過的 `.xpi` 檔。
+4. **在手機上安裝**：把 `.xpi` 傳到手機。Firefox →「設定」→「關於 Firefox」，連點 Firefox 標誌 5 次打開除錯選單，回到「設定」就會出現「從檔案安裝附加元件」，選擇 `.xpi`。
+5. 如果裝好後在 BGA 上沒有反應，到 Firefox 的附加元件管理 → 這個附加元件 →「權限」，允許存取 boardgamearena.com。
+
+簽署過的 `.xpi` 也可以直接分享給朋友安裝。
+
+> 手機版的 BGA 版面比較窄，推測牌和面板是照電腦版設計的，可能會比較擠。
+
 ## 注意事項
 
 - **一定要在輪抽開始前裝好**。BGA 不會重送輪抽紀錄，裝好之前的輪抽無法補記。
@@ -94,6 +108,8 @@ Board Game Arena（BGA）農家樂（Agricola）的 Chrome 擴充功能。幫你
 | `src/background.js` | service worker | 開發用：以「載入未封裝項目」安裝時，偵測檔案變動後自動重新載入 extension，並重整 BGA 牌桌分頁 |
 
 正在進行的牌桌（`/tableview?table=N`）裡，遊戲跑在 `iframe#gameIframe`，所以兩支腳本都設了 `all_frames`。
+
+Firefox 版和 Chrome 版共用同一份程式碼，只有 manifest 不同（`manifest.firefox.json`，需要 Firefox 128 以上才支援 `world: "MAIN"`），也不包含開發用的 `src/background.js`。`scripts/build-firefox.sh` 會把它組到 `dist/firefox/` 並打包成 ZIP。content.js 透過 `globalThis.browser || globalThis.chrome` 取得擴充功能 API。
 
 用到的通知：`newDraftPile`、`add/remove/confirmDraftSelection`、`draftWaiting`、`draftProgress`、`clearDraftPools`、`draftIsOver`、`refreshHand`、`buyCard`、`buyAndPassCard`、`buyAndDestroyCard`。打出卡的人以 `args.player_id` 為準，因為 `buyAndPassCard` 的 `card.pId` 是傳出後的狀態。
 

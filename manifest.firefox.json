@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "BGA 農家樂記牌器",
+  "version": "0.1.0",
+  "description": "記錄 BGA 農家樂輪抽時看過、傳出的牌，以及各玩家已打出的職業卡 / 次要發展卡。",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bga-agricola-card-recorder@khmer-chi.github.io",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": { "required": ["none"] }
+    },
+    "gecko_android": {
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["https://boardgamearena.com/*", "https://*.boardgamearena.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://boardgamearena.com/*", "https://*.boardgamearena.com/*"],
+      "js": ["src/inject.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://boardgamearena.com/*", "https://*.boardgamearena.com/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}
