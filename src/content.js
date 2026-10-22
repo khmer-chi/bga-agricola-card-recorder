@@ -561,7 +561,7 @@
         if (!playedTags[id] && myLabel(id)) playedTags[id] = myLabel(id);
       }
     }
-    const guessLabels = { guess: conv('✎ 猜是他的'), unguess: conv('取消猜測'), pick: conv('猜是誰的：') };
+    const guessLabels = { guess: conv('✎ 猜是他的'), unguess: conv('取消猜測'), pick: conv('猜是誰的：'), board: conv('推測的牌') };
     window.postMessage(
       { source: SOURCE, kind: 'ghosts', payload: { byPlayer, pool, poolTitle, playedTags, guessLabels } },
       window.location.origin

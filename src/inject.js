@@ -175,6 +175,11 @@
     .agr-badge.b-certain { background: #b03a2e; }
     .agr-badge.b-possible { background: #8a7a5c; }
     .agr-ghost-tip { font-weight: bold; margin-bottom: 4px; }
+    /* Inferred cards get their own block under the player's played cards (cards-wrapper). */
+    .agr-board-ghosts { position: relative; display: flex; flex-wrap: wrap; gap: 6px; padding: 16px 5px 6px; margin-top: 6px;
+      border-top: 2px dashed rgba(107, 79, 42, .55); pointer-events: all; }
+    .agr-board-ghosts-title { position: absolute; top: -10px; left: 8px; padding: 0 6px; border-radius: 6px;
+      background: rgba(251, 246, 234, .92); color: #4a3720; font: bold 11px/18px sans-serif; }
     #agr-pool { clear: both; margin: 8px 6px 12px; padding: 8px 10px 10px; border: 2px dashed #8a7a5c; border-radius: 10px;
       background: rgba(251, 246, 234, .55); }
     #agr-pool .agr-pool-title { font: bold 14px sans-serif; color: #4a3720; margin-bottom: 10px; }
@@ -261,6 +266,7 @@
     }
     const pool = document.getElementById('agr-pool');
     if (pool) pool.remove();
+    for (const block of document.querySelectorAll('.agr-board-ghosts')) block.remove();
   };
 
   // Appends one inferred card, drawn with BGA's own template, to `container`.
@@ -316,8 +322,13 @@
     removeGhosts(g);
     for (const [pid, items] of Object.entries(ghostSpec)) {
       const wrapper = document.getElementById('cards-wrapper-' + pid);
-      if (!wrapper) continue;
-      for (const item of items) addGhost(g, wrapper, item, pid);
+      if (!wrapper || !items.length) continue;
+      const block = document.createElement('div');
+      block.id = 'agr-board-' + pid;
+      block.className = 'agr-board-ghosts';
+      block.innerHTML = `<div class="agr-board-ghosts-title">${esc(guessLabels.board || '')}</div>`;
+      wrapper.after(block);
+      for (const item of items) addGhost(g, block, item, pid);
     }
     // Cards any opponent may hold: one shared block under the central action board.
     const column = document.getElementById('player-boards-left-column');
