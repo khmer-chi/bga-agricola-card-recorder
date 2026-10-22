@@ -27,6 +27,7 @@
     pending: [], // ids selected in the current draft pile but not confirmed
     currentPile: [], // ids of the draft pile currently in front of me
     currentTurn: null, // draft turn of the pile in front of me
+    trackedFrom: null, // first draft turn we recorded; > 1 means we missed piles (installed mid-draft)
     draftTotal: null, // total draft turns
     direction: 1, // +1: I pass to the next player in playerOrder, -1: to the previous one
     directionKnown: false, // set once draftWaiting tells us who passes to me
@@ -103,6 +104,7 @@
     if (ids.length && ids.every((id) => state.currentPile.includes(id)) && ids.length === state.currentPile.length) return;
     finalizePile();
     if (turn != null) state.currentTurn = Number(turn);
+    if (state.trackedFrom == null && state.currentTurn != null) state.trackedFrom = state.currentTurn;
     for (const c of cards) {
       remember(c);
       addUnique(state.seen, c.id);
@@ -297,14 +299,14 @@
   const BADGE = { played: '✓', certain: '★', possible: '?' };
 
   // `status` drives the badge; data-* attributes describe the claim for tests and tooling.
-  const cardChip = (id, { extraClass = '', status = '', cands = null, tip = '' } = {}) => {
+  const cardChip = (id, { extraClass = '', status = '', cands = null, tip = '', round = '' } = {}) => {
     const c = state.cards[id] || { id, name: id };
     const num = c.numbering || id.split('_')[0];
     const title = `${c.name} (${num})${tip ? '\n' + tip : ''}`;
     const badge = BADGE[status] ? `<i class="badge b-${status}">${BADGE[status]}</i>` : '';
     return `<span class="card ${esc(c.type || '')} ${status} ${extraClass}" data-id="${esc(id)}" data-status="${esc(status)}"${
       cands ? ` data-cands="${esc(cands.join(','))}"` : ''
-    } title="${esc(title)}">${esc(c.name)}<small>${esc(num)}</small>${badge}</span>`;
+    }${round ? ` data-round="${esc(round)}"` : ''} title="${esc(title)}">${esc(c.name)}<small>${esc(num)}</small>${badge}</span>`;
   };
 
   const byType = (ids) => {
@@ -328,13 +330,18 @@
     const k = successors().indexOf(pid);
     return info && info.turn != null && k >= 0 ? info.turn + k + 1 : null;
   };
-  const roundLabel = (id, pid) => {
+  // e.g. "第6輪 4選1": if `pid` has this card, he took it in round 6, choosing among these 4.
+  const roundLabel = (id, pid, choices = 1) => {
     const r = roundFor(id, pid);
-    return r == null ? '' : conv(`第${r}輪`);
+    if (r == null) return '';
+    return conv(choices > 1 ? `第${r}輪 ${choices}選1` : `第${r}輪`);
   };
-  const possibleTip = (id, cands) => {
+  const possibleTip = (id, cands, choiceOf = () => 1) => {
     const orDiscarded = state.passInfo[id].returned ? '' : conv('，或已被棄');
-    const who = cands.map((pid) => `${pname(pid)}${roundLabel(id, pid) ? `（${roundLabel(id, pid)}）` : ''}`);
+    const who = cands.map((pid) => {
+      const label = roundLabel(id, pid, choiceOf(id, pid));
+      return `${pname(pid)}${label ? `（${label}）` : ''}`;
+    });
     return `${conv('可能')}：${who.join(' / ')}${orDiscarded}`;
   };
   const certainTip = (id, pid) => `${conv('確定在他手上')}${roundLabel(id, pid) ? `（${roundLabel(id, pid)}${conv('選走')}）` : ''}`;
@@ -356,7 +363,17 @@
     }
     for (const list of Object.values(certain)) list.sort((a, b) => typeRank(a) - typeRank(b));
     for (const list of Object.values(possible)) list.sort((a, b) => typeRank(a.id) - typeRank(b.id));
-    return { certain, possible, discarded };
+
+    // A player takes exactly one card of each type from each pile, and in a given round he
+    // sees exactly one of my piles. So his candidates of one type for one round are "pick 1
+    // of K": count K per (player, round, type).
+    const groupKey = (id, pid) => `${pid}|${roundFor(id, pid)}|${state.cards[id] && state.cards[id].type}`;
+    const sizes = {};
+    for (const [pid, ids] of Object.entries(certain)) for (const id of ids) sizes[groupKey(id, pid)] = (sizes[groupKey(id, pid)] || 0) + 1;
+    for (const [pid, list] of Object.entries(possible)) for (const { id } of list) sizes[groupKey(id, pid)] = (sizes[groupKey(id, pid)] || 0) + 1;
+    const choiceOf = (id, pid) => sizes[groupKey(id, pid)] || 1;
+
+    return { certain, possible, discarded, choiceOf };
   };
 
   // Ask inject.js to draw certain / possible cards next to each opponent's played cards.
@@ -374,6 +391,34 @@
   // swamp the board without telling you anything.
   const BOARD_MAX_CANDIDATES = 2;
 
+  // The draft round in which opponent `pid` took a card he has played.
+  //  - A card I passed on: exact, from the pile's path (same as the ghosts' round).
+  //  - A card I never saw: he took it before its pile reached me. A pile travels from its
+  //    owner towards me, so the k-th player after me only sees piles before I do if they
+  //    start at or before him: k piles, in rounds 1..k. For the player I pass to (and the
+  //    opponent in a 2-player game) that's round 1 only, i.e. his first pick. My
+  //    predecessor sees every pile right before me, so his unseen cards span rounds 1..n-1.
+  // Only first plays count (state.played keeps the drafter), so travelling minors passed
+  // on to someone else don't get mislabeled.
+  const playedRound = (id, pid) => {
+    if (state.passInfo[id]) {
+      const r = roundFor(id, pid);
+      return r == null ? null : { lo: r, hi: r };
+    }
+    if (state.seen.includes(id) || state.trackedFrom !== 1 || !state.draftOver) return null;
+    const succ = successors();
+    const k = succ.indexOf(pid) + 1;
+    if (k < 1) return null;
+    const hi = Math.min(k, state.draftTotal || Infinity);
+    return { lo: 1, hi };
+  };
+  const playedLabel = (id, pid) => {
+    const r = playedRound(id, pid);
+    if (!r) return '';
+    if (r.hi === 1) return conv('首選');
+    return conv(r.lo === r.hi ? `第${r.lo}輪` : `第${r.lo}-${r.hi}輪`);
+  };
+
   const pushGhosts = (holdings) => {
     const byPlayer = {};
     if (boardOverlay) {
@@ -383,14 +428,49 @@
           ...(holdings.certain[pid] || []).map((id) => ({ id, status: 'certain', tip: certainTip(id, pid), round: roundLabel(id, pid) })),
           ...(holdings.possible[pid] || [])
             .filter(({ cands }) => cands.length <= BOARD_MAX_CANDIDATES)
-            .map(({ id, cands }) => ({ id, status: 'possible', tip: possibleTip(id, cands), round: roundLabel(id, pid) })),
+            .map(({ id, cands }) => ({
+              id,
+              status: 'possible',
+              tip: possibleTip(id, cands, holdings.choiceOf),
+              round: roundLabel(id, pid, holdings.choiceOf(id, pid)),
+            })),
         ]
           .filter((it) => state.cardData[it.id])
           .map((it) => ({ ...it, card: state.cardData[it.id] }));
         if (items.length) byPlayer[pid] = items;
       }
     }
-    window.postMessage({ source: SOURCE, kind: 'ghosts', payload: { byPlayer } }, window.location.origin);
+    // Cards too widely spread to put on one opponent's board go in a shared pool under the
+    // central action board, once each, ordered by the round I passed them on.
+    const pool = [];
+    if (boardOverlay) {
+      const seenIds = new Set();
+      for (const list of Object.values(holdings.possible)) {
+        for (const { id, cands } of list) {
+          if (cands.length <= BOARD_MAX_CANDIDATES || seenIds.has(id) || !state.cardData[id]) continue;
+          seenIds.add(id);
+          // Each candidate would have taken it in a different round: show the span, e.g. 第4-6輪.
+          const rounds = cands.map((pid) => roundFor(id, pid)).filter((r) => r != null);
+          const lo = Math.min(...rounds);
+          const hi = Math.max(...rounds);
+          const round = rounds.length ? conv(lo === hi ? `第${lo}輪` : `第${lo}-${hi}輪`) : '';
+          pool.push({ id, status: 'possible', tip: possibleTip(id, cands, holdings.choiceOf), round, card: state.cardData[id] });
+        }
+      }
+      const passTurn = (id) => (state.passInfo[id] && state.passInfo[id].turn) || 0;
+      pool.sort((a, b) => passTurn(a.id) - passTurn(b.id) || typeRank(a.id) - typeRank(b.id));
+    }
+    const poolTitle = conv(`三個對手都可能（${pool.length}）`);
+    // Round tags for the real cards opponents have played.
+    const playedTags = {};
+    if (boardOverlay) {
+      for (const [id, pid] of Object.entries(state.played)) {
+        if (pid === state.myId) continue;
+        const label = playedLabel(id, pid);
+        if (label) playedTags[id] = label;
+      }
+    }
+    window.postMessage({ source: SOURCE, kind: 'ghosts', payload: { byPlayer, pool, poolTitle, playedTags } }, window.location.origin);
   };
 
   const render = () => {
@@ -410,9 +490,16 @@
         const certainIds = certain[pid] || [];
         const possibleCards = possible[pid] || [];
         const chips = [
-          ...playedIds.map((id) => cardChip(id, { status: 'played', extraClass: seen.has(id) && !mine.has(id) ? 'seen' : '' })),
+          ...playedIds.map((id) =>
+            cardChip(id, {
+              status: 'played',
+              extraClass: seen.has(id) && !mine.has(id) ? 'seen' : '',
+              tip: pid === state.myId ? '' : playedLabel(id, pid),
+              round: pid === state.myId ? '' : playedLabel(id, pid),
+            })
+          ),
           ...certainIds.map((id) => cardChip(id, { status: 'certain', cands: [pid], tip: certainTip(id, pid) })),
-          ...possibleCards.map(({ id, cands }) => cardChip(id, { status: 'possible', cands, tip: possibleTip(id, cands) })),
+          ...possibleCards.map(({ id, cands }) => cardChip(id, { status: 'possible', cands, tip: possibleTip(id, cands, holdings.choiceOf) })),
         ].join('');
         const counts = [
           `${BADGE.played}${playedIds.length}`,
@@ -468,7 +555,7 @@
   // character by character. Card and player names are left as BGA provides them.
 
   const T2S = Object.fromEntries(
-    [...'來来傳传匯汇學学張张戰战時时暫暂業业棄弃沒没無无發发確确紀纪結结給给綠绿職职觀观記记認认讀读資资輪轮這这過过還还錄录換换體体簡简選选顯显隱隐測测']
+    [...'來来傳传匯汇學学張张戰战時时暫暂業业棄弃沒没無无發发確确紀纪結结給给綠绿職职觀观記记認认讀读資资輪轮這这過过還还錄录換换體体簡简選选顯显隱隐測测個个對对']
       .reduce((pairs, c, i, arr) => (i % 2 ? pairs : [...pairs, [c, arr[i + 1]]]), [])
   );
 
