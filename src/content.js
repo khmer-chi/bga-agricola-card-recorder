@@ -335,21 +335,25 @@
     const k = successors().indexOf(pid);
     return info && info.turn != null && k >= 0 ? info.turn + k + 1 : null;
   };
-  // e.g. "第6輪 4選1": if `pid` has this card, he took it in round 6, choosing among these 4.
-  const roundLabel = (id, pid, choices = 1) => {
-    const r = roundFor(id, pid);
-    if (r == null) return '';
-    return conv(choices > 1 ? `第${r}輪 ${choices}選1` : `第${r}輪`);
+  // Labels are from my point of view: which of my picks the card was passed on at.
+  // e.g. "我第5輪傳出 4選1": it was in the pile I passed on at my 5th pick, and if `pid` has
+  // it, he chose it among these 4 cards of its type.
+  const passLabel = (id, choices = 1) => {
+    const info = state.passInfo[id];
+    if (!info || info.turn == null) return '';
+    return conv(choices > 1 ? `我第${info.turn}輪傳出 ${choices}選1` : `我第${info.turn}輪傳出`);
   };
+  const roundLabel = (id, pid, choices = 1) => (roundFor(id, pid) == null ? '' : passLabel(id, choices));
   const possibleTip = (id, cands, choiceOf = () => 1) => {
     const orDiscarded = state.passInfo[id].returned ? '' : conv('，或已被棄');
     const who = cands.map((pid) => {
-      const label = roundLabel(id, pid, choiceOf(id, pid));
-      return `${pname(pid)}${label ? `（${label}）` : ''}`;
+      const k = choiceOf(id, pid);
+      return `${pname(pid)}${k > 1 ? `（${conv(`${k}選1`)}）` : ''}`;
     });
-    return `${conv('可能')}：${who.join(' / ')}${orDiscarded}`;
+    const from = passLabel(id);
+    return `${from ? from + ' · ' : ''}${conv('可能')}：${who.join(' / ')}${orDiscarded}`;
   };
-  const certainTip = (id, pid) => `${conv('確定在他手上')}${roundLabel(id, pid) ? `（${roundLabel(id, pid)}${conv('選走')}）` : ''}`;
+  const certainTip = (id) => `${conv('確定在他手上')}${passLabel(id) ? `（${passLabel(id)}）` : ''}`;
 
   // Where each card I passed on can be: certain (pile came back without it and only one
   // player could have taken it), possible (one of several players, or maybe discarded),
@@ -424,13 +428,13 @@
     const r = playedRound(id, pid);
     if (!r) return '';
     if (r.hi === 1) return conv('首選');
-    return conv(r.lo === r.hi ? `第${r.lo}輪` : `第${r.lo}-${r.hi}輪`);
+    return state.passInfo[id] ? passLabel(id) : conv('我沒看過');
   };
   // My own cards: the round I confirmed each pick in is recorded exactly.
   const myLabel = (id) => {
     const r = state.myPicks[id];
     if (r == null) return '';
-    return conv(r === 1 ? '首選' : `第${r}輪`);
+    return conv(r === 1 ? '首選' : `我第${r}輪選`);
   };
 
   const pushGhosts = (holdings) => {
@@ -439,7 +443,7 @@
       for (const pid of Object.keys(state.players)) {
         if (pid === state.myId) continue;
         const items = [
-          ...(holdings.certain[pid] || []).map((id) => ({ id, status: 'certain', tip: certainTip(id, pid), round: roundLabel(id, pid) })),
+          ...(holdings.certain[pid] || []).map((id) => ({ id, status: 'certain', tip: certainTip(id), round: passLabel(id) })),
           ...(holdings.possible[pid] || [])
             .filter(({ cands }) => cands.length <= BOARD_MAX_CANDIDATES)
             .map(({ id, cands }) => ({
@@ -463,11 +467,7 @@
         for (const { id, cands } of list) {
           if (cands.length <= BOARD_MAX_CANDIDATES || seenIds.has(id) || !state.cardData[id]) continue;
           seenIds.add(id);
-          // Each candidate would have taken it in a different round: show the span, e.g. 第4-6輪.
-          const rounds = cands.map((pid) => roundFor(id, pid)).filter((r) => r != null);
-          const lo = Math.min(...rounds);
-          const hi = Math.max(...rounds);
-          const round = rounds.length ? conv(lo === hi ? `第${lo}輪` : `第${lo}-${hi}輪`) : '';
+          const round = passLabel(id);
           pool.push({ id, status: 'possible', tip: possibleTip(id, cands, holdings.choiceOf), round, card: state.cardData[id] });
         }
       }
