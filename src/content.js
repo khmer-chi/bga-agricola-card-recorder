@@ -153,11 +153,14 @@
 
   // `byPlayer` comes from args.player_id: for buyAndPassCard the card object already
   // reflects the post-pass state, so card.pId/location are not reliable for "who played it".
+  // Only the first play counts: that's the player who drafted the card. A travelling card
+  // replayed by the player it was passed to must not move it, or the one-per-type exclusion
+  // would wrongly rule that player out for the other cards of its draft pile.
   const markPlayed = (card, byPlayer) => {
     const pid = byPlayer || (card && card.pId);
     if (!card || !card.id || pid == null) return;
     remember(card);
-    state.played[card.id] = String(pid);
+    if (!state.played[card.id]) state.played[card.id] = String(pid);
     remove(state.pending, card.id);
   };
 
