@@ -333,7 +333,7 @@
     .b-certain { background: #b03a2e; }
     .b-possible { background: #8a7a5c; }
     .b-guessed { background: #7b4bb3; }
-    .card.guessed { border-color: #7b4bb3; box-shadow: inset 0 0 0 1px #7b4bb3; }
+    .card.guessed { border-color: #7b4bb3; box-shadow: inset 0 0 0 1px #7b4bb3; opacity: .85; }
     .card.by-guess { border-color: #7b4bb3; }
     .card.by-guess .badge { background: #7b4bb3; }
     .toast { position: fixed; z-index: 2147483001; left: 50%; top: 12px; transform: translateX(-50%); max-width: 420px;
