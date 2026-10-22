@@ -186,7 +186,7 @@
     }
     for (const [id, label] of Object.entries(playedTags)) {
       const el = document.getElementById(id);
-      if (!el || !el.closest('[id^="cards-wrapper-"], [id^="action-cards-group-"]')) continue;
+      if (!el || !el.closest('[id^="cards-wrapper-"], [id^="action-cards-group-"], #hand-container')) continue;
       if (el.querySelector(':scope > .agr-played-round')) continue;
       el.classList.add('agr-played-host');
       const tag = document.createElement('div');

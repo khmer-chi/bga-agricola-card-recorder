@@ -37,6 +37,7 @@
     pickQuota: null, // { occupation: 1, minor: 1 }: cards of each type a player takes per draft turn
     played: {}, // id -> player id who played it
     cardData: {}, // id -> full BGA card object, so the board overlay can render it after a reload
+    myPicks: {}, // id -> draft round in which I took it
     draftOver: false,
     updatedAt: 0,
   });
@@ -94,7 +95,10 @@
     const passed = state.currentPile.filter((id) => !state.mine.includes(id) && !state.pending.includes(id));
     for (const id of passed) state.passInfo[id] = { turn: state.currentTurn, returned: false };
     if (passed.length) state.passedPiles.push({ ids: passed, turn: state.currentTurn });
-    for (const id of state.pending) addUnique(state.mine, id);
+    for (const id of state.pending) {
+      addUnique(state.mine, id);
+      if (state.myPicks[id] == null && state.currentTurn != null) state.myPicks[id] = state.currentTurn;
+    }
     state.pending = [];
     state.currentPile = [];
   };
@@ -231,6 +235,7 @@
           remember(args.card);
           remove(state.pending, args.card.id);
           addUnique(state.mine, args.card.id);
+          if (state.myPicks[args.card.id] == null && state.currentTurn != null) state.myPicks[args.card.id] = state.currentTurn;
         }
         break;
       case 'clearDraftPools':
@@ -421,6 +426,12 @@
     if (r.hi === 1) return conv('首選');
     return conv(r.lo === r.hi ? `第${r.lo}輪` : `第${r.lo}-${r.hi}輪`);
   };
+  // My own cards: the round I confirmed each pick in is recorded exactly.
+  const myLabel = (id) => {
+    const r = state.myPicks[id];
+    if (r == null) return '';
+    return conv(r === 1 ? '首選' : `第${r}輪`);
+  };
 
   const pushGhosts = (holdings) => {
     const byPlayer = {};
@@ -464,13 +475,15 @@
       pool.sort((a, b) => passTurn(a.id) - passTurn(b.id) || typeRank(a.id) - typeRank(b.id));
     }
     const poolTitle = conv(`三個對手都可能（${pool.length}）`);
-    // Round tags for the real cards opponents have played.
+    // Round tags for real cards: everyone's played cards, plus the cards in my hand.
     const playedTags = {};
     if (boardOverlay) {
       for (const [id, pid] of Object.entries(state.played)) {
-        if (pid === state.myId) continue;
-        const label = playedLabel(id, pid);
+        const label = pid === state.myId ? myLabel(id) : playedLabel(id, pid);
         if (label) playedTags[id] = label;
+      }
+      for (const id of state.mine) {
+        if (!playedTags[id] && myLabel(id)) playedTags[id] = myLabel(id);
       }
     }
     window.postMessage({ source: SOURCE, kind: 'ghosts', payload: { byPlayer, pool, poolTitle, playedTags } }, window.location.origin);
@@ -497,8 +510,8 @@
             cardChip(id, {
               status: 'played',
               extraClass: seen.has(id) && !mine.has(id) ? 'seen' : '',
-              tip: pid === state.myId ? '' : playedLabel(id, pid),
-              round: pid === state.myId ? '' : playedLabel(id, pid),
+              tip: pid === state.myId ? myLabel(id) : playedLabel(id, pid),
+              round: pid === state.myId ? myLabel(id) : playedLabel(id, pid),
             })
           ),
           ...certainIds.map((id) => cardChip(id, { status: 'certain', cands: [pid], tip: certainTip(id, pid) })),
