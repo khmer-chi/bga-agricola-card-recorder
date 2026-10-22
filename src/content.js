@@ -5,7 +5,7 @@
   window.__agrRecContent = true;
 
   const SOURCE = 'agr-rec';
-  const TYPE_LABEL = { occupation: '職業', minor: '小發明', major: '大發明' };
+  const TYPE_LABEL = { occupation: '職業卡', minor: '次要發展卡', major: '主要發展卡' };
 
   let state = null;
   let storageKey = null;
@@ -619,7 +619,7 @@
 
     const draftStatus = state.draftOver ? '輪抽結束' : state.seen.length ? '輪抽中' : '未記錄到輪抽';
     const notes = [];
-    if (state.isBeginner) notes.push('初學者模式：沒有職業 / 小發明卡');
+    if (state.isBeginner) notes.push('初學者模式：沒有職業卡 / 次要發展卡');
     if (state.isSpectator) notes.push('觀戰中：看不到輪抽和手牌');
     if (state.isReplay) notes.push('重播模式');
     if (state.playerOrder.length > 2 && state.seen.length && !state.directionKnown) notes.push('傳牌方向未確認，暫定傳給下一位');
