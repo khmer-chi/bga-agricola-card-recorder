@@ -124,6 +124,11 @@ Firefox 版和 Chrome 版共用同一份程式碼，只有 manifest 不同（`ma
 - 用一場真實 4 人局的重播（重播裡包含所有玩家的私人輪抽頻道）做回放：只把我自己頻道收到的通知餵給 content.js，再拿全部玩家的選牌紀錄當正確答案比對，所有判斷都正確。
 - 同一場重播也確認：新的一疊牌一定在我確認選牌之後才送達。
 
+### 測試與交接
+
+- `npm test`：用真實 4 人競技場重播資料做回放測試，加上隨機模擬（`tests/`）。
+- 接手開發請先讀 [docs/HANDOFF.md](docs/HANDOFF.md)。
+
 ### 除錯
 
 - 遊戲 iframe 的 DevTools console 裡，`window.__agrRecLog` 保留了所有追蹤到的原始通知。

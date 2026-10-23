@@ -1,0 +1,15 @@
+{
+  "name": "bga-agricola-card-recorder",
+  "private": true,
+  "description": "Dev tooling for the BGA Agricola card recorder extension (the extension itself needs no build).",
+  "scripts": {
+    "test": "npm run test:replay && npm run test:sim",
+    "test:replay": "node tests/replay-test.js > /dev/null && GUESS=A5m:2 node tests/replay-test.js > /dev/null && GUESS=A5m:1 WRONG=1 node tests/replay-test.js > /dev/null && TRAVEL=E25m:1 node tests/replay-test.js > /dev/null && echo 'replay tests OK'",
+    "test:sim": "node tests/sim.js",
+    "test:panel": "node tests/panel-test.js",
+    "build:firefox": "./scripts/build-firefox.sh"
+  },
+  "devDependencies": {
+    "jsdom": "24.1.3"
+  }
+}
